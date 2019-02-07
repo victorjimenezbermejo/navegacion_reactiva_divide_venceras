@@ -12,13 +12,21 @@
 
 const double inf = std::numeric_limits<double>::infinity();
 const double pi = 3.14159265;
+const int UNKNOWN = 0;
+const int YES = 1;
+const int NO = -1;
 
 
 /** Suscripciones */
 ros::Subscriber laserSub;
+ros::Subscriber odomSub;
+ros::Subscriber ground_truthSub;
+ros::Subscriber objectiveSub;
 
 
 /** Funciones */ 
+void regiones_navigables();
+bool comprobar_navigable();
 void escribir_ficheros();
 
 
@@ -27,13 +35,27 @@ void escribir_ficheros();
 const int num_laser = 360;
 
 // Distancia máxima a la que queremos que llegue el LIDAR
-const float max_range = 30.0; // metros
+const float max_range_laser = 30.0; // metros
 
 // Distancia que define cuándo hay una discontinuidad. Sugieren un valor igual o mayor al diámetro del robot.
 const float rango_discontinuidad = 1.5; // metros
 
 
+struct position{
+	float x;
+	float y;
+	float theta;
+};
+struct position odom, pos_obj, ground_truth;
 
-std::vector <float > v_PND;
+struct region_charac{
+	float gap_1;
+	float gap_2;
+	bool obj_inside;
+	float obj_ang_nearness;
+	int navigable;
+};
+
+std::vector <float > v_laser, v_PND;
 std::vector <int> v_i_discontinuities;
-std::vector <std::pair<float, float> > v_regions;
+std::vector <region_charac> v_regions;
