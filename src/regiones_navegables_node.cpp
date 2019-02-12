@@ -68,7 +68,7 @@ void ground_truthCallback(const nav_msgs::Odometry::ConstPtr msg_ground_truth)
 {
 	ground_truth.x = msg_ground_truth->pose.pose.position.x;
 	ground_truth.y = msg_ground_truth->pose.pose.position.y;
-	ground_truth.theta = 2*atan2(msg_ground_truth->pose.pose.orientation.z, msg_ground_truth->pose.pose.orientation.w);
+	ground_truth.theta = 2*atan2(msg_ground_truth->pose.pose.orientation.z, msg_ground_truth->pose.pose.orientation.w); 
 
 	printf("Ground truth: %f, %f, %f\n", ground_truth.x, ground_truth.y, ground_truth.theta*180.0/pi);
 }
@@ -83,17 +83,17 @@ int main(int argc, char **argv) {
 	laserSub = nh.subscribe("/Doris/scan", 1, laserCallback);
 	odomSub = nh.subscribe("/Doris/odom", 1, odomCallback);
 	ground_truthSub = nh.subscribe("/Doris/ground_truth/state", 1, ground_truthCallback);
-	objectiveSub = nh.subscribe("punto_bjetivo", 1, objectiveCallback);
+	objectiveSub = nh.subscribe("/punto_objetivo", 1, objectiveCallback);
 
 	v_PND.reserve(180);
 
 	printf("Nodo lanzado\n");
 
 	pos_obj.x = 10.0;
-	pos_obj.y = 0.0;
+	pos_obj.y = -5.0;
 	
 	
-	ros::Rate r(10);
+	ros::Rate r(1);
 	while (ros::ok())
 	{
 		regiones_navigables();
@@ -121,15 +121,16 @@ void regiones_navigables()
 
 	/** 0. Calcular máxima distancia */
 	float distance_objective = std::sqrt( std::pow(pos_obj.x - ground_truth.x, 2.0) + std::pow(pos_obj.y - ground_truth.y, 2.0) );
-	float angle_objective = std::atan2(pos_obj.y - ground_truth.y, pos_obj.x - ground_truth.x) - ground_truth.theta; 
+	float angle_objective = fixAngle180Rad( std::atan2(pos_obj.y - ground_truth.y, pos_obj.x - ground_truth.x) - ground_truth.theta ); 
 
 	float max_range = max_range_laser;
 	if(distance_objective < max_range)
 	{
-		max_range = distance_objective;
+		max_range = distance_objective + rango_discontinuidad;
 	}
 
-	printf("Distancia al objetivo %f, máximo rango %f\n", distance_objective, max_range);
+	printf("\n\n\nDistancia al objetivo %f, máximo rango %f\n", distance_objective, max_range);
+	printf("Ángulo al objetivo %f\n", angle_objective * 180.0 / pi);
 
 
 	/** 1. Nearest diagram */
@@ -160,14 +161,14 @@ void regiones_navigables()
 		{
 			// Ojito i no es el ángulo. La operación realizada cambia el vector de derecha a izquierda a ángulos entre -90 y 90
 			v_i_discontinuities.push_back(i); 
-			printf("Discontinuidad en el ángulo %f, con magnitud %f\n", 90.0 - (i) / 2.0, std::abs( v_PND.at(i) - v_PND.at(i-1) ));
+			printf("Discontinuidad en el ángulo %f, con magnitud %f\n", i / 2.0 - 90.0, std::abs( v_PND.at(i) - v_PND.at(i-1) ));
 		}
 	}
 	if(v_PND.back() == 0.0){
 		v_i_discontinuities.push_back(v_PND.size() - 1);
 	}
 
-	printf("Número discontinuidades (contando con -90 y 90): %d\n\n", v_i_discontinuities.size());
+	printf("Número discontinuidades: %d\n\n", v_i_discontinuities.size());
 
 
 
@@ -198,33 +199,37 @@ void regiones_navigables()
 
 
 				// Comprobar si el objetivo está dentro de esta región o calcular cómo de lejos está
-				if( (angle_objective >= (90.0 - (region.gap_1) / 2.0) * pi/180.0) && (angle_objective <= (90.0 - (region.gap_2) / 2.0) * pi/ 180.0) ){
+				if( (angle_objective >= (region.gap_1 / 2.0 - 90.0) * pi/180.0) && (angle_objective <= ((region.gap_2) / 2.0 - 90.0) * pi/ 180.0) ){
 					region.obj_inside = true;
+					region.nearest_gap = 0;
 					region.obj_ang_nearness = 0.0;
 				}
 				else
 				{
 					region.obj_inside = false;
 
-					dist_1 = angle_objective - ( (90.0 - (region.gap_1) / 2.0) * pi/180.0 );
-					dist_2 = angle_objective - ( (90.0 - (region.gap_2) / 2.0) * pi/180.0 );
+					dist_1 = angle_objective - ( (region.gap_1 / 2.0 - 90.0) * pi/180.0 );
+					dist_2 = angle_objective - ( (region.gap_2 / 2.0 - 90.0) * pi/180.0 );
 					if(std::abs(dist_1) < std::abs(dist_2)){
+						region.nearest_gap = 1;
 						region.obj_ang_nearness = dist_1; // Si la dist es negativa ya sabemos que es el gap 1. Si es positiva es el gap 2
 					}
 					else{
-						region.obj_ang_nearness = dist_2; // Si la dist es negativa ya sabemos que es el gap 1. Si es positiva es el gap 2
+						region.nearest_gap = 2;
+						region.obj_ang_nearness = dist_2; // Si la dist es positiva ya sabemos que es el gap 2. Si es negativa es el gap 1
 					}
 				}
 
 				region.navigable = UNKNOWN;
 				v_regions.push_back(region);
-				printf("Región entre los ánuglos: %f y %f\n", 90.0 - (region.gap_1) / 2.0, 90.0 - (region.gap_2) / 2.0);
+				printf("Región entre los ángulos: %f y %f. Obj dentro %d\n", region.gap_1 / 2.0  - 90.0, region.gap_2 / 2.0 - 90.0, region.obj_inside);
 
 			}
 		}
 	}
 	else
 	{
+		std::cout<<"MENOS DE 2 DISCONTINUIDADES"<<std::endl;
 		region.gap_1 = 0;
 		region.gap_2 = num_laser - 1;
 		region.obj_inside = true;
@@ -242,7 +247,9 @@ void regiones_navigables()
 		Pero hay que comprobar si la región elegida es navigable, si no lo es habrá que elegir la siguiente mejor.
 	*/
 	int i_region = -1, i_closests = -1;
+	float min_dist = inf;
 	// Bucle hasta encontrar una región navigable.
+	std::cout<<"Objetivo en el angulo "<<angle_objective * 180.0 / pi<<std::endl;
 	do
 	{
 		i_region = -1;
@@ -254,7 +261,7 @@ void regiones_navigables()
 		// Si alguna no explorada contiene al objetivo se elige esa. Si no aquella que presente la discontinuidad más cercana
 		for(int i = 0; i < v_regions.size() && (i_region == -1); i++)
 		{
-			if(v_regions.at(i).navigable == UNKOWN)
+			if(v_regions.at(i).navigable == UNKNOWN)
 			{
 				if(v_regions.at(i).obj_inside){
 					i_region = i;
@@ -263,62 +270,180 @@ void regiones_navigables()
 				{
 					if(std::abs(v_regions.at(i).obj_ang_nearness) < min_dist)
 					{
-						mind_dist = std::abs(v_regions.at(i).obj_ang_nearness);
+						min_dist = std::abs(v_regions.at(i).obj_ang_nearness);
 						i_closests = i;
 					}
 				}
-
 			}
 		}
+		if(i_region == -1){
+			i_region = i_closests;
+		}
 
-		i_region = i_closests;
+
 	}
-	while( !comprobar_navigable(v_regions.at(i_region), angle_objective, distance_objective) );
+	while( !comprobar_navigable(&v_regions.at(i_region), angle_objective, distance_objective) );
 
+
+	std::cout<<"REGIÓN ELEGIDA: "<<1 + i_region<<std::endl;
+
+#ifdef ESCRIBIR_FICHEROS
 	escribir_ficheros();
+#endif
 }
 
 
 /** Función que calcula si un punto es alcanzable o no*/
-bool navigable comprobar_navigable(vector<region_charac> reg, float ang_obj, float dist_obj)
+bool comprobar_navigable(region_charac *reg, float ang_obj, float dist_obj)
 {
-	printf("Analizando region entre los angulos: %f y %f\n", 90.0 - (reg.gap_1) / 2.0, 90.0 - (reg.gap_2) / 2.0);
+	printf("\nAnalizando region entre los angulos: %f y %f\n", reg->gap_1 / 2.0 - 90.0, reg->gap_2 / 2.0 - 90.0);
 
 	float x_obj, y_obj;
 	
-	if(reg.obj_inside)
+	if(reg->obj_inside)
 	{
 		x_obj = pos_obj.x;
 		y_obj = pos_obj.y;
 	}
 	else
 	{
-		/** Si el objetivo no está dentro de la región hay que poner como objetivo de esta región aquel punto que esté más cercano al objetivo */
+		/** Si el objetivo no está dentro de la región hay que poner como objetivo de esta región,
+		    aquel punto que esté más cercano al objetivo */
 		// El punto más cercano se calcula como la intersección de la recta P y la recta Q
-		// - P: recta que pasa por la posición del robot y el punto objetivo
+		// - P: recta definida por la discontinuidad más próxima al objetivo original
 		// - Q: recta perpendicular a P que pasa por el punto objetivo
 
 		// Recta P
-		float m_P = std::tan( (pos_obj.y - ground_truth.y) / (pos_obj.x - ground_truth.y) );
-		float n_P = pos_obj.y - m_P * pos_obj.x;
+		float m_P;
+		if(reg->nearest_gap == 1){
+			m_P = tan( fixAngle180Rad( (reg->gap_1 / 2.0 - 90.0) * pi / 180.0 ) );
+		}
+		else if(reg->nearest_gap == 2){
+			m_P = tan( fixAngle180Rad( (reg->gap_2 / 2.0 - 90.0) * pi / 180.0 ) );
+		}
+		else{
+			std::cout<<"Maaaaaaaaaaaal, aquí no habría que entrar"<<std::endl;
+		}
+		float n_P = ground_truth.y - m_P * ground_truth.x; 
+
 		// Recta Q
-		float m_Q = (-1) * (1 / m_P);
-		float n_Q = pos_obj.y - n_P * pos_obj.x;
+		float m_Q = (-1) * (1 / m_P); // Formula perpendicular a m_P
+		float n_Q = pos_obj.y - m_Q * pos_obj.x;
 		// Nuevo punto objetivo
-		x_obj = (n_Q - n_P) / (m_Q - m_P);
+		x_obj = (-1) * (n_Q - n_P) / (m_Q - m_P);
 		y_obj = m_Q*x_obj + n_Q;
 
 		/** Si cambia el punto objetivo hay que repetir el cálculo de la distancia y ángulo a él*/ 
-		dist_obj = std::sqrt( std::pow(pos_obj.x - ground_truth.x, 2.0) + std::pow(pos_obj.y - ground_truth.y, 2.0) );
-		ang_obj = std::atan2(pos_obj.y - ground_truth.y, pos_obj.x - ground_truth.x) - ground_truth.theta; 
+		dist_obj = std::sqrt( std::pow(y_obj - ground_truth.y, 2.0) + std::pow(x_obj - ground_truth.x, 2.0) );
+		ang_obj = fixAngle180Rad( std::atan2(y_obj - ground_truth.y, x_obj - ground_truth.x) - ground_truth.theta ); 
+
+		std::cout<<"NO se puede alcanzar el objetivo. Punto más próximo: "<<x_obj<<", "<<y_obj<<std::endl;
+		std::cout<<"Por el gap: "<<reg->nearest_gap<<std::endl;
+		std::cout<<"Con distancia: "<<dist_obj<<" y ángulo: "<<ang_obj*180.0/pi<<std::endl;
+		std::cout<<"Recta P: m = "<<m_P<<" n = "<<n_P<<std::endl;
+		std::cout<<"Recta Q: m = "<<m_Q<<" n = "<<n_Q<<std::endl;
+	}
+
+	// Recta entre el robot y el objetivo final que se va a intentar alcanzar
+	float m_obj = (y_obj - ground_truth.y) / (y_obj - ground_truth.y);
+	float n_obj = y_obj - m_obj * x_obj;
+	//std::cout<<"Recta que entre el punto y el robot: y = ("<<m_obj<<") * x + ("<<n_obj<<")"<<std::endl;
+
+
+	/** 4.1 Solo coger los puntos que nos interesen de la región */
+	std::vector<laserPoint> v_mapa_region;
+	laserPoint p;
+	float d;
+	for(int i = 0; i < v_laser.size(); i++)
+	{
+		// I. Solo aquellos puntos que están en el círculo de Radio = distancia al objetivo + rango seguridad (discontinuidad)
+		if(v_laser.at(i) < (dist_obj + rango_discontinuidad) )
+		{
+			// II. Se calcula el punto donde impacta el rayo con el objeto
+			// y se eliminan aquellos puntos que están alejados de la recta formada por el robot y el objetivo final			
+			p.x = v_laser.at(i) * std::cos(i/2.0 * pi/180.0);
+			p.y = v_laser.at(i) * std::sin(i/2.0 * pi/180.0);
+			d = std::fabs(m_obj * p.x - p.y + n_obj) / std::sqrt(std::pow(m_obj, 2.0) + 1.0);
+			
+
+
+
+
+
+
+
+
+
+
+
+
+
+			if( true) // d < rango_discontinuidad) // Tal vez la mitad de rango_discontinuidad es suficiente, al fin y al cabo vamos a tener esto a los dos lados de la recta. Pero bueno... mejor ser precavido
+			{
+				p.dist = v_laser.at(i);
+				p.angle = fixAngle180Rad( (i / 2.0 - 90.0) * pi / 180.0 );
+
+				v_mapa_region.push_back(p);
+			}
+		}
 	}
 
 
-	/** 4.1 Eliminar puntos que no nos interesen de la región */
-	
+#ifdef ESCRIBIR_FICHEROS	
+	std::ofstream f_mapa_seleccionado;
+	f_mapa_seleccionado.open("/home/vjimenez/catkin_ws/src/regiones_navegables/include/regiones_navegables/mapa_seleccionado.txt", std::ios::out); 
+	if(f_mapa_seleccionado.fail()) 
+		std::cout<<"No se puedo abrir el archivo distancia"<<std::endl;
+
+	for(unsigned int i = 0; i < v_mapa_region.size(); i ++)
+		f_mapa_seleccionado<<v_mapa_region.at(i).x<<"\t"<<v_mapa_region.at(i).y<<"\t"<<v_mapa_region.at(i).dist<<"\t"<<v_mapa_region.at(i).angle<<"\n";
+
+	f_mapa_seleccionado.close();
+#endif	
 
 
-	return false;
+	/** 4.2 Comprobar si el robot pasa por la región */
+	// En teoría la trayectoria aproximada que se va a implementar es ir recto por la recta que une la posición del robot y el objetivo
+	// Así los puntos que quedan se dividen en dos grupos, uno a cada lado de esta recta.
+	// Cada punto es un impacto del láser, no sabemos cómo de grande es el objeto detectado -> cada punto se expande en un círculo 
+	// Si hay intersecciones entre los puntos (circulos) de cada lado de la curva -> NO puede pasar.
+
+	for(int i = 0; i < v_mapa_region.size() && (reg->navigable != NO); i++) // Ojo doble condición
+	{
+		// i sólo para ángulos a la derecha
+		if(fixAngle180Rad(ang_obj - v_mapa_region.at(i).angle > 0.0) )
+		{
+			for(int j = 0; j < v_mapa_region.size() && (reg->navigable != NO); j++) // Ojo doble condición
+			{
+				// j sólo para ángulos a la izquierda
+				if(fixAngle180Rad(ang_obj - v_mapa_region.at(j).angle < 0.0) )
+				{
+					// Si hay dos puntos muy próximos descartamos.
+					// Cada punto suponemos que por lo menos representa un objeto de radio: "radio_puntos_laser".
+					// Dos puntos están cercanos cuando la distancia entre sus supuestos objetos es menor al hueco por el que el robot puede pasar
+					// Es decir: < 2*radio_puntos_laser + rango_discontinuidad
+					d = std::sqrt( std::pow( (v_mapa_region.at(i).x - v_mapa_region.at(j).x), 2.0) + std::pow( (v_mapa_region.at(i).y - v_mapa_region.at(j).y), 2.0) );
+					//std::cout<<"Distancia entre ("<<v_mapa_region.at(i).x<<", "<<v_mapa_region.at(i).y<<") y ("<<v_mapa_region.at(j).x<<", "<<v_mapa_region.at(j).y<<") -> "<<d<<std::endl;
+					if(d < 2*radio_puntos_laser + rango_discontinuidad){
+						std::cout<<"No navegable por distancia: "<<d<<" siendo el límite: "<<2*radio_puntos_laser + rango_discontinuidad<<std::endl;
+						reg->navigable = NO;
+					}
+				}
+			}
+		}
+	}
+
+	std::cout<<"Region navegable? "<<reg->navigable<<std::endl;
+
+	if(reg->navigable == NO){
+		printf("La región NO es navegable\n");
+		return false;
+	}
+	else{
+		printf("La región SI es navegable\n");
+		reg->navigable = YES;
+		return true;
+	}
 }
 
 
@@ -348,7 +473,7 @@ void escribir_ficheros()
 
 	f_discontinuities.close();
 
-/*
+
 	// Regiones
 	std::ofstream f_regiones;
 	f_regiones.open("/home/vjimenez/catkin_ws/src/regiones_navegables/include/regiones_navegables/regiones.txt", std::ios::out); 
@@ -360,5 +485,51 @@ void escribir_ficheros()
 		f_regiones<<v_regions.at(i).gap_1<<" "<<v_regions.at(i).gap_2<<"\n";
 
 	f_regiones.close();
-	*/
+
+
+
+
+	// Mapa captado
+	std::ofstream f_mapa;
+	f_mapa.open("/home/vjimenez/catkin_ws/src/regiones_navegables/include/regiones_navegables/mapa.txt", std::ios::out); 
+	if(f_mapa.fail()) 
+		std::cout<<"No se puedo abrir el archivo mapa"<<std::endl;
+
+	float x, y;
+	for(unsigned int i = 0; i < v_laser.size(); i ++)
+	{
+		x = v_laser.at(i)*cos( (i / 2.0) * pi / 180.0);
+		y = v_laser.at(i)*sin( (i / 2.0) * pi / 180.0);
+		f_mapa<<x<<"\t"<<y<<"\n";
+	}
+
+	f_mapa.close();
+	
+}
+
+
+float fixAngle180Rad(float ang)
+{
+	while(ang > pi){
+		ang -= 2*pi;
+	}
+
+	while(ang <= -pi){
+		ang += 2*pi;
+	}
+
+	return ang;
+}
+
+float fixAngle360Rad(float ang)
+{
+	while(ang > 2*pi){
+		ang -= 2*pi;
+	}
+
+	while(ang <= 0.0){
+		ang += 2*pi;
+	}
+
+	return ang;
 }
