@@ -43,6 +43,7 @@ const float rango_discontinuidad = 1.5; // metros
 const float radio_puntos_laser = 0.2; // metros
 
 
+
 struct position{
 	float x;
 	float y;
